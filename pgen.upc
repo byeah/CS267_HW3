@@ -14,6 +14,7 @@ int main(int argc, char *argv[]){
 
 	/** Declarations **/
 	double inputTime=0.0, constrTime=0.0, traversalTime=0.0;
+    //printf("Thread %d of %d: hello UPC world\n",MYTHREAD, THREADS);
 
 	/** Read input **/
 	upc_barrier;
@@ -21,6 +22,19 @@ int main(int argc, char *argv[]){
 	///////////////////////////////////////////
 	// Your code for input file reading here //
 	///////////////////////////////////////////
+	char *input_UFX_name = argv[1];
+	int64_t nKmers = getNumKmersInUFX(input_UFX_name);
+	int64_t startP = MYTHREAD*(nKmers / THREADS);
+	int64_t endP = (MYTHREAD+1)*(nKmers / THREADS);
+	if (endP > nKmers) endP = nKmers;
+	total_chars_to_read = (endP - startP) * LINE_SIZE;
+	
+    working_buffer = (unsigned char*) malloc(total_chars_to_read * sizeof(unsigned char));
+    FILE *inputFile = fopen(input_UFX_name, "r");
+    fseek(inputFile,startP*LINE_SIZE,SEEK_SET);
+    int64_t cur_chars_read = fread(working_buffer, sizeof(unsigned char),total_chars_to_read , inputFile);
+    fclose(inputFile);
+    
 	upc_barrier;
 	inputTime += gettime();
 
