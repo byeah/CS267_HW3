@@ -9,6 +9,115 @@
 #include "packingDNAseq.h"
 #include "kmer_hash.h"
 
+//Shared data
+shared unsigned char*shared pointers[THREADS];
+
+//Private data
+int64_t nKmers,total;
+unsigned char *buffer;
+
+void read_data(char *input_UFX_name)
+{
+	total = getNumKmersInUFX(input_UFX_name);
+	int64_t perThread = (total+THREADS-1) / THREADS;
+	int64_t startP = MYTHREAD * perThread;
+	int64_t endP = (MYTHREAD+1)* perThread;
+	if (endP > total) endP = total;
+	nKmers = endP-startP;
+	int64_t total_chars_to_read = nKmers * LINE_SIZE;
+	
+    buffer = malloc(total_chars_to_read * sizeof(unsigned char));
+    FILE *inputFile = fopen(input_UFX_name, "r");
+    fseek(inputFile,startP*LINE_SIZE,SEEK_SET);
+    int64_t cur_chars_read = fread(buffer, sizeof(unsigned char),total_chars_to_read , inputFile);
+    fclose(inputFile);
+    if (MYTHREAD == 0 )printf("Finish Reading\n");
+}
+
+int64_t getHashVal(unsigned char* kmer)
+{
+    char packedKmer[KMER_PACKED_LENGTH];
+    packSequence(kmer, (unsigned char*) packedKmer, KMER_LENGTH);
+    int64_t hashval = hashkmer(total, (char*) packedKmer);
+    return hashval;
+}
+
+void prepare_localdata(shared int64_t* pos,shared int64_t* length)
+{
+    int64_t N = nKmers * LINE_SIZE;
+    pointers[MYTHREAD] = upc_alloc((N+1) * sizeof(unsigned char));
+    unsigned char* working_buffer = (unsigned char*) pointers[MYTHREAD];
+    int* id = malloc(nKmers*sizeof(int));
+    int64_t *cnt = malloc(THREADS*sizeof(int64_t));
+    memset(cnt,0,sizeof(int64_t)*THREADS);
+    int64_t ptr = 0,i=0;
+    while(ptr<N)
+    {
+        int64_t hVal = getHashVal(buffer+ptr);
+        id[i]=hVal%THREADS;
+        cnt[id[i]]++;
+        i++;
+        ptr+=LINE_SIZE;
+    }
+    //for(int k=0;k<THREADS;k++)
+        //printf("%d to %d:  %lld\n",MYTHREAD,k,cnt[k]);
+        
+    for(int k=0;k<THREADS;k++)
+        length[MYTHREAD*THREADS+k]=cnt[k];
+    for(int k=1;k<THREADS;k++)
+        cnt[k]+=cnt[k-1];
+        
+    ptr = 0,i=0;
+    while(ptr<N)
+    {
+        int64_t offset = (--cnt[id[i]])*LINE_SIZE;
+        memcpy(working_buffer+offset,buffer+ptr,LINE_SIZE*sizeof(char));
+        i++;
+        ptr+=LINE_SIZE;
+    }    
+    for(int k=0;k<THREADS;k++)
+        pos[MYTHREAD*THREADS+k]=cnt[k];
+    upc_barrier;
+    free(buffer);
+}
+
+
+void shuffle_data()
+{
+    shared int64_t* pos = upc_all_alloc(THREADS,THREADS*sizeof(int64_t));
+    shared int64_t* length = upc_all_alloc(THREADS,THREADS*sizeof(int64_t));
+    prepare_localdata(pos,length);
+    
+    
+    //Pull remote data
+    nKmers = 0;
+    for(int i=0;i<THREADS;i++)
+        nKmers+=length[i*THREADS+MYTHREAD];
+    printf("%d: nKmers: %d\n",MYTHREAD,nKmers);
+    unsigned char* ptr = malloc((nKmers*LINE_SIZE+1)*sizeof(char));
+    buffer = ptr;
+    for(int i=0;i<THREADS;i++){
+        shared unsigned char* pointer = pointers[i];
+        upc_memget(ptr,pointer+(pos[i*THREADS+MYTHREAD]*LINE_SIZE*THREADS),length[i*THREADS+MYTHREAD]*LINE_SIZE*sizeof(char));
+        ptr+=length[i*THREADS+MYTHREAD]*LINE_SIZE;
+        //printf("%d from %d at %d len %d\n",MYTHREAD,i,pos[i*THREADS+MYTHREAD],length[i*THREADS+MYTHREAD]);
+    }
+    /*printf("%d\n",sizeof(char));
+    char s[LINE_SIZE+1];
+    shared unsigned char* pointer = pointers[1];
+    upc_memget(s,pointer+LINE_SIZE*THREADS,LINE_SIZE);
+    s[LINE_SIZE]=0;
+    printf("%s",s);*/
+    
+    /*char file[5]="out00";
+    file[3]=(char)(MYTHREAD+48);file[4]=0;
+    printf("%s\n",file);
+    FILE *fout = fopen(file,"w");
+    buffer[nKmers*LINE_SIZE]=0;
+    fprintf(fout,"%s",buffer);
+    fclose(fout);*/
+}
+
 
 int main(int argc, char *argv[]){
 
@@ -22,18 +131,7 @@ int main(int argc, char *argv[]){
 	///////////////////////////////////////////
 	// Your code for input file reading here //
 	///////////////////////////////////////////
-	char *input_UFX_name = argv[1];
-	int64_t nKmers = getNumKmersInUFX(input_UFX_name);
-	int64_t startP = MYTHREAD*(nKmers / THREADS);
-	int64_t endP = (MYTHREAD+1)*(nKmers / THREADS);
-	if (endP > nKmers) endP = nKmers;
-	total_chars_to_read = (endP - startP) * LINE_SIZE;
-	
-    working_buffer = (unsigned char*) malloc(total_chars_to_read * sizeof(unsigned char));
-    FILE *inputFile = fopen(input_UFX_name, "r");
-    fseek(inputFile,startP*LINE_SIZE,SEEK_SET);
-    int64_t cur_chars_read = fread(working_buffer, sizeof(unsigned char),total_chars_to_read , inputFile);
-    fclose(inputFile);
+	read_data(argv[1]);
     
 	upc_barrier;
 	inputTime += gettime();
@@ -43,6 +141,9 @@ int main(int argc, char *argv[]){
 	///////////////////////////////////////////
 	// Your code for graph construction here //
 	///////////////////////////////////////////
+	shuffle_data();
+	//build_hashtable();
+	
 	upc_barrier;
 	constrTime += gettime();
 
