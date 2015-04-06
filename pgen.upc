@@ -79,6 +79,8 @@ void prepare_localdata(shared int64_t* pos,shared int64_t* length)
         pos[MYTHREAD*THREADS+k]=cnt[k];
     upc_barrier;
     free(buffer);
+    free(id);
+    free(cnt);
 }
 
 
@@ -93,7 +95,7 @@ void shuffle_data()
     nKmers = 0;
     for(int i=0;i<THREADS;i++)
         nKmers+=length[i*THREADS+MYTHREAD];
-    printf("%d: nKmers: %d\n",MYTHREAD,nKmers);
+    printf("%d: nKmers: %lld\n",MYTHREAD,nKmers);
     unsigned char* ptr = malloc((nKmers*LINE_SIZE+1)*sizeof(char));
     buffer = ptr;
     for(int i=0;i<THREADS;i++){
@@ -118,6 +120,83 @@ void shuffle_data()
     fclose(fout);*/
 }
 
+hash_table_t *hashtable;
+memory_heap_t memory_heap;
+start_kmer_t *startKmersList = NULL;
+
+void preprocessing()
+{
+    /* Create a hash table */
+    hashtable = create_hash_table(nKmers, &memory_heap);
+
+    /* Process the working_buffer and store the k-mers in the hash table */
+    /* Expected format: KMER LR ,i.e. first k characters that represent the kmer, then a tab and then two chatacers, one for the left (backward) extension and one for the right (forward) extension */
+    int64_t N = nKmers*LINE_SIZE, ptr=0;
+    while (ptr < N) {
+      /* working_buffer[ptr] is the start of the current k-mer                */
+      /* so current left extension is at working_buffer[ptr+KMER_LENGTH+1]    */
+      /* and current right extension is at working_buffer[ptr+KMER_LENGTH+2]  */
+    
+      char left_ext = (char) buffer[ptr+KMER_LENGTH+1];
+      char right_ext = (char) buffer[ptr+KMER_LENGTH+2];
+      /* Add k-mer to hash table */
+      add_kmer(hashtable, &memory_heap, &buffer[ptr], left_ext, right_ext);
+    
+      /* Create also a list with the "start" kmers: nodes with F as left (backward) extension */
+      if (left_ext == 'F') {
+         addKmerToStartList(&memory_heap, &startKmersList);
+      }
+    
+      /* Move to the next k-mer in the input working_buffer */
+      ptr += LINE_SIZE;
+    }
+
+}
+
+char cur_contig[MAXIMUM_CONTIG_SIZE];
+
+void traversal()
+{
+    char file[20];
+    sprintf(file,"pgen%d.out",MYTHREAD);
+    FILE* fout = fopen(file, "w");
+    char unpackedKmer[KMER_LENGTH+1];
+    /* Pick start nodes from the startKmersList */
+    start_kmer_t *curStartNode = startKmersList;
+    
+    while (curStartNode != NULL ) {
+      /* Need to unpack the seed first */
+      kmer_t* cur_kmer_ptr = curStartNode->kmerPtr;
+      unpackSequence((unsigned char*) cur_kmer_ptr->kmer,  (unsigned char*) unpackedKmer, KMER_LENGTH);
+      /* Initialize current contig with the seed content */
+      memcpy(cur_contig ,unpackedKmer, KMER_LENGTH * sizeof(char));
+      int posInContig = KMER_LENGTH;
+      char right_ext = cur_kmer_ptr->r_ext;
+    
+      /* Keep adding bases while not finding a terminal node */
+      while (right_ext != 'F') {
+         cur_contig[posInContig] = right_ext;
+         posInContig++;
+         /* At position cur_contig[posInContig-KMER_LENGTH] starts the last k-mer in the current contig */
+         cur_kmer_ptr = lookup_kmer(hashtable, (const unsigned char *) &cur_contig[posInContig-KMER_LENGTH]);
+         if (cur_kmer_ptr == NULL){
+             printf("NULL\n");
+             break;
+         }
+         right_ext = cur_kmer_ptr->r_ext;
+      }
+    
+      /* Print the contig since we have found the corresponding terminal node */
+      cur_contig[posInContig] = '\0';
+      fprintf(fout,"%s\n", cur_contig);
+      //contigID++;
+      //totBases += strlen(cur_contig);
+      /* Move to the next start node in the list */
+      curStartNode = curStartNode->next;
+    }
+    
+    fclose(fout);
+}
 
 int main(int argc, char *argv[]){
 
@@ -131,6 +210,8 @@ int main(int argc, char *argv[]){
 	///////////////////////////////////////////
 	// Your code for input file reading here //
 	///////////////////////////////////////////
+	init_LookupTable();
+
 	read_data(argv[1]);
     
 	upc_barrier;
@@ -142,8 +223,8 @@ int main(int argc, char *argv[]){
 	// Your code for graph construction here //
 	///////////////////////////////////////////
 	shuffle_data();
-	//build_hashtable();
-	
+	preprocessing();
+	printf("Finish preprocessing\n");
 	upc_barrier;
 	constrTime += gettime();
 
@@ -153,6 +234,7 @@ int main(int argc, char *argv[]){
 	// Your code for graph traversal and output printing here //
 	// Save your output to "pgen.out"                         //
 	////////////////////////////////////////////////////////////
+	traversal();
 	upc_barrier;
 	traversalTime += gettime();
 
