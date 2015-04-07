@@ -20,7 +20,7 @@ void init_LookupTable()
 		int remainder = i;
 		int pos = 0;
 		for( slot = merLen-1; slot >= 0; slot-- ) {
-         valInSlot = remainder / pow4(slot);
+			valInSlot = remainder / pow4(slot);
 			char base;
 			
 			if( valInSlot == 0 ) { base = 'A'; }
@@ -31,7 +31,7 @@ void init_LookupTable()
 			
 			mer[pos] = base;
 			pos++;
-         remainder -= valInSlot * pow4(slot);
+			remainder -= valInSlot * pow4(slot);
 		}
 		unsigned int *merAsUInt = (unsigned int*) mer;
 		packedCodeToFourMer[i] = (unsigned int) (*merAsUInt);
