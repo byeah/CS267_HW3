@@ -77,7 +77,7 @@ hash_table_upc_t * create_hash_table_upc(int64_t nEntries)//, memory_heap_upc_t 
 
 
 /* Looks up a kmer in the hash table and returns a pointer to that entry */
-kmer_upc_t* lookup_kmer_upc(hash_table_upc_t* hashtable,const unsigned char *kmer,kmer_upc_t* tmp)
+kmer_upc_t* lookup_kmer_helper_upc(hash_table_upc_t* hashtable,const unsigned char *kmer,kmer_upc_t* tmp)
 {
    char packedKmer[KMER_PACKED_LENGTH];
    //char tmp[KMER_PACKED_LENGTH];
@@ -87,10 +87,10 @@ kmer_upc_t* lookup_kmer_upc(hash_table_upc_t* hashtable,const unsigned char *kme
    //int64_t cur;
    int64_t pos = hashtable->table[hashval*THREADS];
    //result = hashtable->heap.heap+pos*THREADS;
-   
    //for (; result!=NULL; ) {
    for(;pos>=0;){
-      *tmp = hashtable->heap.heap[pos*THREADS];
+      //*tmp = hashtable->heap.heap[pos*THREADS];
+      upc_memget(tmp,hashtable->heap.heap+pos*THREADS,sizeof(kmer_upc_t));
       //upc_memget(tmp,hashtable->heap.heap[pos*THREADS],KMER_PACKED_LENGTH * sizeof(char));
       if ( memcmp(packedKmer, tmp->kmer, KMER_PACKED_LENGTH * sizeof(char)) == 0 ) {
          return tmp;

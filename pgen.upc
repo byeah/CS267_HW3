@@ -35,7 +35,7 @@ void read_data(char *input_UFX_name)
     if (MYTHREAD == 0 )printf("Finish Reading\n");
 }
 
-int64_t getHashVal(int64_t size,unsigned char* kmer)
+int64_t getHashVal(int64_t size,const unsigned char* kmer)
 {
     char packedKmer[KMER_PACKED_LENGTH];
     packSequence(kmer, (unsigned char*) packedKmer, KMER_LENGTH);
@@ -124,6 +124,9 @@ void shuffle_data()
 hash_table_upc_t *hashtable;
 start_kmer_upc_t *startKmersList = NULL;
 
+shared hash_table_upc_t hashtables[THREADS];
+hash_table_upc_t* local_tables;
+
 void preprocessing()
 {
     /* Create a hash table */
@@ -148,10 +151,25 @@ void preprocessing()
       /* Move to the next k-mer in the input working_buffer */
       ptr += LINE_SIZE;
     }
+    //!!!@!@!@!@!@!hashtables[MYTHREAD] = *hashtable;
+    upc_memput(hashtables+MYTHREAD,hashtable,sizeof(hash_table_upc_t));
+    //printf("%lld\n",(*hashtable).size);
+    //printf("%lld\n",hashtables[MYTHREAD].size);
+    upc_barrier;
+    local_tables = (hash_table_upc_t*)malloc(THREADS*sizeof(hash_table_upc_t));
+    for(int i=0;i<THREADS;i++)
+        upc_memget(local_tables+i,hashtables+i,sizeof(hash_table_upc_t));
+        //local_tables[i]=hashtables[i];
 }
 
 char cur_contig[MAXIMUM_CONTIG_SIZE];
 kmer_upc_t tmp;
+
+kmer_upc_t* lookup_kmer_upc(const unsigned char *kmer)
+{
+    int64_t hashval = getHashVal(total,kmer);
+    return lookup_kmer_helper_upc(local_tables+hashval%THREADS,kmer,&tmp);
+}
 
 void traversal()
 {
@@ -177,7 +195,9 @@ void traversal()
          cur_contig[posInContig] = right_ext;
          posInContig++;
          /* At position cur_contig[posInContig-KMER_LENGTH] starts the last k-mer in the current contig */
-         cur_kmer_ptr = lookup_kmer_upc(hashtable, (const unsigned char *) &cur_contig[posInContig-KMER_LENGTH],&tmp);
+         cur_kmer_ptr = lookup_kmer_upc((const unsigned char *) &cur_contig[posInContig-KMER_LENGTH]);
+         //printf("!!Fin look\n");
+         //cur_kmer_ptr = lookup_kmer_upc(hashtable, (const unsigned char *) &cur_contig[posInContig-KMER_LENGTH],&tmp);
          if (cur_kmer_ptr == NULL){
              printf("NULL\n");
              break;
@@ -223,7 +243,7 @@ int main(int argc, char *argv[]){
 	///////////////////////////////////////////
 	shuffle_data();
 	preprocessing();
-	printf("Finish preprocessing\n");
+	//printf("Finish preprocessing\n");
 	upc_barrier;
 	constrTime += gettime();
 
@@ -234,8 +254,7 @@ int main(int argc, char *argv[]){
 	// Save your output to "pgen.out"                         //
 	////////////////////////////////////////////////////////////
 	traversal();
-	printf("$!!\n");
-
+	
 	upc_barrier;
 	traversalTime += gettime();
 
