@@ -8,6 +8,7 @@
 
 #include "packingDNAseq.h"
 #include "kmer_hash.h"
+#include "kmer_hash_upc.h"
 
 //Shared data
 shared unsigned char*shared pointers[THREADS];
@@ -34,11 +35,11 @@ void read_data(char *input_UFX_name)
     if (MYTHREAD == 0 )printf("Finish Reading\n");
 }
 
-int64_t getHashVal(unsigned char* kmer)
+int64_t getHashVal(int64_t size,unsigned char* kmer)
 {
     char packedKmer[KMER_PACKED_LENGTH];
     packSequence(kmer, (unsigned char*) packedKmer, KMER_LENGTH);
-    int64_t hashval = hashkmer(total, (char*) packedKmer);
+    int64_t hashval = hashkmer(size, (char*) packedKmer);
     return hashval;
 }
 
@@ -53,7 +54,7 @@ void prepare_localdata(shared int64_t* pos,shared int64_t* length)
     int64_t ptr = 0,i=0;
     while(ptr<N)
     {
-        int64_t hVal = getHashVal(buffer+ptr);
+        int64_t hVal = getHashVal(total,buffer+ptr);
         id[i]=hVal%THREADS;
         cnt[id[i]]++;
         i++;
@@ -120,15 +121,13 @@ void shuffle_data()
     fclose(fout);*/
 }
 
-hash_table_t *hashtable;
-memory_heap_t memory_heap;
-start_kmer_t *startKmersList = NULL;
+hash_table_upc_t *hashtable;
+start_kmer_upc_t *startKmersList = NULL;
 
 void preprocessing()
 {
     /* Create a hash table */
-    hashtable = create_hash_table(nKmers, &memory_heap);
-
+    hashtable = create_hash_table_upc(nKmers);
     /* Process the working_buffer and store the k-mers in the hash table */
     /* Expected format: KMER LR ,i.e. first k characters that represent the kmer, then a tab and then two chatacers, one for the left (backward) extension and one for the right (forward) extension */
     int64_t N = nKmers*LINE_SIZE, ptr=0;
@@ -140,20 +139,19 @@ void preprocessing()
       char left_ext = (char) buffer[ptr+KMER_LENGTH+1];
       char right_ext = (char) buffer[ptr+KMER_LENGTH+2];
       /* Add k-mer to hash table */
-      add_kmer(hashtable, &memory_heap, &buffer[ptr], left_ext, right_ext);
-    
+      add_kmer_upc(hashtable, &buffer[ptr], left_ext, right_ext);
       /* Create also a list with the "start" kmers: nodes with F as left (backward) extension */
       if (left_ext == 'F') {
-         addKmerToStartList(&memory_heap, &startKmersList);
+         addKmerToStartList_upc(&hashtable->heap, &startKmersList);
       }
     
       /* Move to the next k-mer in the input working_buffer */
       ptr += LINE_SIZE;
     }
-
 }
 
 char cur_contig[MAXIMUM_CONTIG_SIZE];
+kmer_upc_t tmp;
 
 void traversal()
 {
@@ -162,11 +160,12 @@ void traversal()
     FILE* fout = fopen(file, "w");
     char unpackedKmer[KMER_LENGTH+1];
     /* Pick start nodes from the startKmersList */
-    start_kmer_t *curStartNode = startKmersList;
+    
+    start_kmer_upc_t *curStartNode = startKmersList;
     
     while (curStartNode != NULL ) {
       /* Need to unpack the seed first */
-      kmer_t* cur_kmer_ptr = curStartNode->kmerPtr;
+      kmer_upc_t* cur_kmer_ptr = curStartNode->kmerPtr;
       unpackSequence((unsigned char*) cur_kmer_ptr->kmer,  (unsigned char*) unpackedKmer, KMER_LENGTH);
       /* Initialize current contig with the seed content */
       memcpy(cur_contig ,unpackedKmer, KMER_LENGTH * sizeof(char));
@@ -178,7 +177,7 @@ void traversal()
          cur_contig[posInContig] = right_ext;
          posInContig++;
          /* At position cur_contig[posInContig-KMER_LENGTH] starts the last k-mer in the current contig */
-         cur_kmer_ptr = lookup_kmer(hashtable, (const unsigned char *) &cur_contig[posInContig-KMER_LENGTH]);
+         cur_kmer_ptr = lookup_kmer_upc(hashtable, (const unsigned char *) &cur_contig[posInContig-KMER_LENGTH],&tmp);
          if (cur_kmer_ptr == NULL){
              printf("NULL\n");
              break;
@@ -235,6 +234,8 @@ int main(int argc, char *argv[]){
 	// Save your output to "pgen.out"                         //
 	////////////////////////////////////////////////////////////
 	traversal();
+	printf("$!!\n");
+
 	upc_barrier;
 	traversalTime += gettime();
 
